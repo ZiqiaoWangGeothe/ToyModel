@@ -1,3 +1,10 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jul 25 19:38:06 2018
+
+@author: wangz
+"""
+
 
 # -*- coding: utf-8 -*-
 """
@@ -15,6 +22,7 @@ import time
 
 torch.manual_seed(1000)
 t = time.time()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 data = lda.datasets.load_reuters()
 vocab = lda.datasets.load_reuters_vocab()
@@ -41,24 +49,18 @@ class Toy(nn.Module):
         self.k_dim = k_dim
         self.softmax =  nn.Softmax(dim=0)
         
-        self.w2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/v_dim), np.sqrt(3/v_dim), (vocab_size, v_dim))))
-        self.t2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/k_dim), np.sqrt(3/k_dim), (topic_size, k_dim))))
-#         self.B = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(0.1), np.sqrt(.1),(v_dim, k_dim))))
-#         self.A = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(.1), np.sqrt(.1),(v_dim, k_dim))))
-#         self.w2v = nn.Parameter(torch.randn(vocab_size, v_dim, dtype=self.dtype))
-#         self.t2v = nn.Parameter(torch.randn(topic_size, k_dim, dtype=self.dtype))
-        self.B = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype))
-        self.A = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype))
-#         self.sigma = nn.Parameter(torch.rand(1, dtype=self.dtype))
+        self.w2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/v_dim), np.sqrt(3/v_dim), (vocab_size, v_dim)), device=device))
+        self.t2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/k_dim), np.sqrt(3/k_dim), (topic_size, k_dim)), device=device))
+        self.B = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype, device=device))
+        self.A = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype, device=device))
         
     def forward(self):
-#         sigma_mat = self.sigma * torch.eye(self.v_dim)
-        sigma = torch.rand(1, dtype=self.dtype)
-        alpha = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype)
-        mu = torch.FloatTensor().new_full((self.v_dim, self.vocab_size), 0, dtype=self.dtype)
-        s = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype)
-        P = torch.FloatTensor().new_full((1,self.vocab_size), 0, dtype=self.dtype)
-        RL = torch.Tensor([0])
+        sigma = torch.rand(1, dtype=self.dtype, device=device)
+        alpha = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype, device=device)
+        mu = torch.FloatTensor().new_full((self.v_dim, self.vocab_size), 0, dtype=self.dtype, device=device)
+        s = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype, device=device)
+        P = torch.FloatTensor().new_full((1,self.vocab_size), 0, dtype=self.dtype, device=device)
+        RL = torch.Tensor([0], device=device)
         
         for i in range(self.vocab_size):
             s[:,i] = torch.mm(torch.mm(self.w2v[i].unsqueeze(0), self.B), self.t2v.t()) 
@@ -67,8 +69,6 @@ class Toy(nn.Module):
 
             mu[:,i] = torch.mm(self.A,(alpha[:,i].clone().unsqueeze(1).repeat(1, self.k_dim)* self.t2v).sum(0).unsqueeze(1)).squeeze(1)
 
-#             P[:,i] = (self.sigma**(self.v_dim)).log() \
-#                             + torch.mm(torch.mm((self.w2v[i]-mu[:,i]).unsqueeze(0), sigma_mat.inverse()), (self.w2v[i]-mu[:,i]).unsqueeze(1))     
             P[:,i] = 1/sigma * torch.mm((self.w2v[i]-mu[:,i]).unsqueeze(0), (self.w2v[i]-mu[:,i]).unsqueeze(1))     
 
         RL = ((alpha - torch.mean(alpha, 1).unsqueeze(1).repeat(1, self.vocab_size))**2).sum()
@@ -85,9 +85,7 @@ def main():
     cost = []
     long = []
     
-    model = Toy(V, v_d, K,  k_d)
-    # for param in model.parameters():
-    #     print(param)
+    model = Toy(V, v_d, K,  k_d).to(device)
     data.dtype = 'int32'
     n = torch.FloatTensor(data)
     import torch.utils.data as Data
@@ -103,18 +101,14 @@ def main():
     for epoch in range(itera):
         print('------current epoch:{}------'.format(epoch))
         losses = []
-        scheduler.step()
+        scheduler.step()    
         for step, (batch_x,) in enumerate(loader, 0):
             optimizer.zero_grad()
             alpha, P, RL, s, sigma = model()
-            loss = model.MLE(batch_x, lamda, P, RL)
+            loss = model.MLE(batch_x.to(device), lamda, P, RL)
             loss.backward()
-    #         for param in model.parameters():
-    #             print(param)
             nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
-    #         for param in model.parameters():
-    #             print(param)
             losses.append(loss.item())
             if long == [] or loss.item() < min(long):
                 result = s
