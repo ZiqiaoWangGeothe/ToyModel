@@ -53,8 +53,8 @@ class Toy(nn.Module):
         mu = torch.FloatTensor().new_full((self.v_dim, self.vocab_size), 0, dtype=self.dtype, device = device)
         s = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype, device = device)
         P = torch.FloatTensor().new_full((1, self.vocab_size), 0, dtype=self.dtype, device = device)
-        RL = torch.FloatTensor().new_full((1, doc.shape[0]), 0, dtype=self.dtype, device = device)
-        a_mean = torch.FloatTensor().new_full((self.topic_size, doc.shape[0]), 0, dtype=self.dtype, device = device)
+#        RL = torch.FloatTensor().new_full((1, doc.shape[0]), 0, dtype=self.dtype, device = device)
+#        a_mean = torch.FloatTensor().new_full((self.topic_size, doc.shape[0]), 0, dtype=self.dtype, device = device)
         
         s = torch.mm(torch.mm(self.w2v, self.B), self.t2v.t()).t()
 
@@ -64,15 +64,15 @@ class Toy(nn.Module):
 
         P = 1/sigma * torch.mm((self.w2v-mu.t()), (self.w2v.t()-mu)).diag()     
         
-        a_mean = (1/doc.sum(1)).unsqueeze(1)*(doc.view(-1,1,V)*alpha).sum(2)
+#        a_mean = (1/doc.sum(1)).unsqueeze(1)*(doc.view(-1,1,V)*alpha).sum(2)
         
-        RL = (doc*(((alpha.t()-a_mean.view(-1, 1, self.topic_size)))**2).sum(2)).sum(1)
+#        RL = (doc*(((alpha.t()-a_mean.view(-1, 1, self.topic_size)))**2).sum(2)).sum(1)
             
-        return alpha, P, RL, s, sigma, self.w2v.clone(), self.t2v.clone()
+        return alpha, P,  s, sigma, self.w2v.clone(), self.t2v.clone()
     
-    def MLE(self, doc, lamda, P, RL):
+    def MLE(self, doc, lamda, P):
 
-        return ((doc * P).sum() + (lamda * RL).sum())/doc.shape[0]
+        return ((doc * P).sum())/doc.shape[0]
 
 def main():
     lamda = 100
@@ -103,8 +103,8 @@ def main():
         for step, (batch_x,) in enumerate(loader, 0):
             scheduler.step()
             optimizer.zero_grad()
-            alpha, P, RL, s, sigma, w2v, t2v = model(batch_x.to(device))
-            loss = model.MLE(batch_x.to(device), lamda, P, RL)
+            alpha, P, s, sigma, w2v, t2v = model(batch_x.to(device))
+            loss = model.MLE(batch_x.to(device), lamda, P)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 3.0)
             optimizer.step()

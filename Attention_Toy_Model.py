@@ -13,8 +13,9 @@ import matplotlib.pyplot as plt
 import torch.optim as optim
 import time
 
-torch.manual_seed(1000)
+torch.manual_seed(1234)
 t = time.time()
+
 
 data = lda.datasets.load_reuters()
 vocab = lda.datasets.load_reuters_vocab()
@@ -43,55 +44,48 @@ class Toy(nn.Module):
         
         self.w2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/v_dim), np.sqrt(3/v_dim), (vocab_size, v_dim))))
         self.t2v = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(3/k_dim), np.sqrt(3/k_dim), (topic_size, k_dim))))
-#         self.B = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(0.1), np.sqrt(.1),(v_dim, k_dim))))
-#         self.A = nn.Parameter(torch.FloatTensor(np.random.uniform(-np.sqrt(.1), np.sqrt(.1),(v_dim, k_dim))))
-#         self.w2v = nn.Parameter(torch.randn(vocab_size, v_dim, dtype=self.dtype))
-#         self.t2v = nn.Parameter(torch.randn(topic_size, k_dim, dtype=self.dtype))
         self.B = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype))
         self.A = nn.Parameter(torch.randn(v_dim, k_dim, dtype=self.dtype))
-#         self.sigma = nn.Parameter(torch.rand(1, dtype=self.dtype))
         
-    def forward(self):
-#         sigma_mat = self.sigma * torch.eye(self.v_dim)
+    def forward(self, doc):
         sigma = torch.rand(1, dtype=self.dtype)
         alpha = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype)
         mu = torch.FloatTensor().new_full((self.v_dim, self.vocab_size), 0, dtype=self.dtype)
         s = torch.FloatTensor().new_full((self.topic_size, self.vocab_size), 0, dtype=self.dtype)
-        P = torch.FloatTensor().new_full((1,self.vocab_size), 0, dtype=self.dtype)
-        RL = torch.Tensor([0])
+        P = torch.FloatTensor().new_full((1, self.vocab_size), 0, dtype=self.dtype)
+        RL = torch.FloatTensor().new_full((1, doc.shape[0]), 0, dtype=self.dtype)
+        a_mean = torch.FloatTensor().new_full((self.topic_size, doc.shape[0]), 0, dtype=self.dtype)
         
-        for i in range(self.vocab_size):
-            s[:,i] = torch.mm(torch.mm(self.w2v[i].unsqueeze(0), self.B), self.t2v.t()) 
+        s = torch.mm(torch.mm(self.w2v, self.B), self.t2v.t()).t()
 
-            alpha[:,i] = self.softmax(s[:,i].clone())
+        alpha = self.softmax(s.clone())
+        
+        mu = torch.mm(self.A,(alpha.t().view(self.vocab_size, self.topic_size,-1)* self.t2v).sum(1).t())
 
-            mu[:,i] = torch.mm(self.A,(alpha[:,i].clone().unsqueeze(1).repeat(1, self.k_dim)* self.t2v).sum(0).unsqueeze(1)).squeeze(1)
-
-#             P[:,i] = (self.sigma**(self.v_dim)).log() \
-#                             + torch.mm(torch.mm((self.w2v[i]-mu[:,i]).unsqueeze(0), sigma_mat.inverse()), (self.w2v[i]-mu[:,i]).unsqueeze(1))     
-            P[:,i] = 1/sigma * torch.mm((self.w2v[i]-mu[:,i]).unsqueeze(0), (self.w2v[i]-mu[:,i]).unsqueeze(1))     
-
-        RL = ((alpha - torch.mean(alpha, 1).unsqueeze(1).repeat(1, self.vocab_size))**2).sum()
+        P = 1/sigma * torch.mm((self.w2v-mu.t()), (self.w2v.t()-mu)).diag()     
+        
+        a_mean = (1/doc.sum(1)).unsqueeze(1)*(doc.view(-1,1,V)*alpha).sum(2)
+        
+        RL = (doc*(((alpha.t()-a_mean.view(-1, 1, self.topic_size)))**2).sum(2)).sum(1)
             
-        return alpha, P, RL, s, sigma
+        return alpha, P, RL, s, sigma, self.w2v.clone(), self.t2v.clone()
     
     def MLE(self, doc, lamda, P, RL):
 
-        return (doc * P).sum()/doc.shape[0] + lamda * RL
+        return ((doc * P).sum() + (lamda * RL).sum())/doc.shape[0]
 
 def main():
-    lamda = 0
-    itera = 500
+    lamda = 100
+    itera = 10
     cost = []
     long = []
     
     model = Toy(V, v_d, K,  k_d)
-    # for param in model.parameters():
-    #     print(param)
+#    alpha1, P1, RL1, s1, sigma1, w2v1, t2v1 = model()
     data.dtype = 'int32'
     n = torch.FloatTensor(data)
     import torch.utils.data as Data
-    BATCH_SIZE = 64
+    BATCH_SIZE = 100
     torch_dataset = Data.TensorDataset(n)
     loader = Data.DataLoader(dataset=torch_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
     
@@ -99,26 +93,23 @@ def main():
 #    optimizer = optim.SGD(model.parameters(), lr=learning_rate ) 
 #    optimizer = optim.Adagrad(model.parameters(), lr=learning_rate)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=.95)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=50, gamma=.8)
     for epoch in range(itera):
         print('------current epoch:{}------'.format(epoch))
         losses = []
-        scheduler.step()
+#        scheduler.step()
         for step, (batch_x,) in enumerate(loader, 0):
+            scheduler.step()
             optimizer.zero_grad()
-            alpha, P, RL, s, sigma = model()
+            alpha, P, RL, s, sigma, w2v, t2v = model(batch_x)
             loss = model.MLE(batch_x, lamda, P, RL)
             loss.backward()
-    #         for param in model.parameters():
-    #             print(param)
-            nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            nn.utils.clip_grad_norm_(model.parameters(), 3.0)
             optimizer.step()
-    #         for param in model.parameters():
-    #             print(param)
             losses.append(loss.item())
             if long == [] or loss.item() < min(long):
-                result = s
-                torch.save(model.state_dict(), 'save_model_paramsVD{}KD{}LR{}IT{}.pth'.format(v_d, k_d, learning_rate, itera))
+                result = s.clone()
+                torch.save(model.state_dict(), 'save_model_paramsVD{}KD{}LR{}IT{}BS{}.pth'.format(v_d, k_d, learning_rate, itera, BATCH_SIZE))
             print(loss.item())
             long.append(loss.item())
         cost.append(sum(losses)/len(losses))     
@@ -128,8 +119,12 @@ def main():
     plt.plot(cost)
     plt.show()       
     print('the total time is :', time.time() - t)
-    return result, sigma, cost, long
+    return result, sigma, cost, long, w2v, t2v, alpha, s#, s1, RL, RL1
 
 if __name__ == '__main__':
     __spec__ = None 
-    score, sigma, cost, long = main()
+    score, sigma, cost, long, word, topic, a, s = main()
+    n_top_words = 5
+    for i, topic_dist in enumerate(score.detach().numpy()):
+        topic_words = np.array(vocab)[np.argsort(topic_dist)][:-(n_top_words+1):-1]
+        print('Topic {}: {}'.format(i, ' '.join(topic_words)))
